@@ -18,8 +18,6 @@ namespace Backend {
 class SimpleLRU : public Afina::Storage {
 public:
     SimpleLRU(size_t max_size = 1024) : _max_size(max_size) {}
-    SimpleLRU(const SimpleLRU&) = delete;
-    SimpleLRU& operator=(const SimpleLRU&) = delete;
 
     ~SimpleLRU() {
         _lru_index.clear();
@@ -61,11 +59,11 @@ private:
 
     };
 
-    void _cut(lru_node& node);
-    //void _pop_back();
+    void _cut(lru_node& node, bool save = true);
+
     void _pop_back();
-    //void _push_front(lru_node* node);
-    void _push_front(lru_node *node);
+    void _push_front(lru_node* node);
+
     // Maximum number of bytes could be stored in this cache.
     // i.e all (keys+values) must be less the _max_size
     std::size_t _max_size;
