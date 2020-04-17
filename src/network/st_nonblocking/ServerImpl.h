@@ -2,8 +2,10 @@
 #define AFINA_NETWORK_ST_NONBLOCKING_SERVER_H
 
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
+#include "Connection.h"
 #include <afina/network/Server.h>
 
 namespace spdlog {
@@ -56,6 +58,7 @@ private:
 
     // IO thread
     std::thread _work_thread;
+    std::unordered_set<Connection *> connections;
 };
 
 } // namespace STnonblock
