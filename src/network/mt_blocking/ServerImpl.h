@@ -1,11 +1,13 @@
 #ifndef AFINA_NETWORK_MT_BLOCKING_SERVER_H
 #define AFINA_NETWORK_MT_BLOCKING_SERVER_H
 
+#include <afina/concurrency/Executor.h>
 #include <atomic>
-#include <thread>
 #include <condition_variable>
 #include <mutex>
 #include <set>
+#include <thread>
+
 #include <afina/network/Server.h>
 
 namespace spdlog {
@@ -55,6 +57,7 @@ private:
 
     // Thread to run network on
     std::thread _thread;
+
     std::mutex _mutex;
     std::mutex _m_cv;
     std::mutex _m_cs;
@@ -64,6 +67,7 @@ private:
 
     std::condition_variable _cv;
     std::set<int> _client_sockets;
+    Concurrency::Executor executor;
 };
 
 } // namespace MTblocking

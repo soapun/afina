@@ -28,14 +28,14 @@ namespace Network {
 namespace MTblocking {
 
 // See Server.h
-ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl) : Server(ps, pl) {}
+ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl)
+    : Server(ps, pl), executor(5, 5, 5, 1000) {}
 
 // See Server.h
 ServerImpl::~ServerImpl() {}
 
 // See Server.h
 void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
-    _max_workers = n_workers;
 
     _logger = pLogging->select("network");
     _logger->info("Start mt_blocking network service");
@@ -77,30 +77,25 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
     running.store(true);
     _count_workers.store(0);
     _thread = std::thread(&ServerImpl::OnRun, this);
+    executor.Start();
 }
 
 // See Server.h
 void ServerImpl::Stop() {
-    {
-        std::unique_lock<std::mutex> lock(_mutex);
-        running.store(false);
-    }
-
+    running.store(false);
     shutdown(_server_socket, SHUT_RDWR);
-
-    std::unique_lock<std::mutex> lock_cs(_m_cs);
     for (auto socket : _client_sockets)
         shutdown(socket, SHUT_RD);
+    executor.Stop(true);
 }
 
 // See Server.h
 void ServerImpl::Join() {
+    std::unique_lock<std::mutex> lock(_mutex);
+    while (_count_workers)
+        _cv.wait(lock, [this]() { return !_count_workers; });
     assert(_thread.joinable());
     _thread.join();
-
-    std::unique_lock<std::mutex> lock(_m_cv);
-    while (_count_workers)
-        _cv.wait(lock);
 }
 
 // See Server.h
@@ -146,27 +141,16 @@ void ServerImpl::OnRun() {
             setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
         }
 
-        // TODO: Start new thread and process data from/to connection
-        {
-            std::unique_lock<std::mutex> lock(_mutex);
-            if (running.load() && _count_workers < _max_workers) {
-                ++_count_workers;
-                std::thread(&ServerImpl::Worker, this, client_socket).detach();
-                {
-                    std::unique_lock<std::mutex> lock_cs(_m_cs);
-                    _client_sockets.insert(client_socket);
-                }
-            } else
-                close(client_socket);
+        if (!(running.load() && executor.Execute(&ServerImpl::Worker, this, client_socket))) {
+            close(client_socket);
         }
     }
 
     // Cleanup on exit...
     _logger->warn("Network stopped");
-    close(_server_socket);
 }
 
-void ServerImpl::Worker(int client_socket ) {
+void ServerImpl::Worker(int client_socket) {
 
     std::size_t arg_remains;
     Protocol::Parser parser;
@@ -174,7 +158,7 @@ void ServerImpl::Worker(int client_socket ) {
     std::unique_ptr<Execute::Command> command_to_execute;
 
     try {
-        int readed_bytes = -1;
+        int readed_bytes = 0;
         char client_buffer[4096];
         while ((readed_bytes = read(client_socket, client_buffer, sizeof(client_buffer))) > 0) {
             _logger->debug("Got {} bytes from socket", readed_bytes);
@@ -213,7 +197,7 @@ void ServerImpl::Worker(int client_socket ) {
                     _logger->debug("Fill argument: {} bytes of {}", readed_bytes, arg_remains);
                     // There is some parsed command, and now we are reading argument
                     std::size_t to_read = std::min(arg_remains, std::size_t(readed_bytes));
-                    argument_for_command.append(client_buffer, to_read);
+                    argument_for_command.append(client_buffer, to_read - (arg_remains == to_read) * 2);
 
                     std::memmove(client_buffer, client_buffer + to_read, readed_bytes - to_read);
                     arg_remains -= to_read;
@@ -253,18 +237,7 @@ void ServerImpl::Worker(int client_socket ) {
     // We are done with this connection
 
     close(client_socket);
-    {
-        std::unique_lock<std::mutex> lock_cs(_m_cs);
-        _client_sockets.erase(client_socket);
-    }
-
-    --_count_workers;
-    if (!_count_workers) {
-        _cv.notify_one();
-    }
-
 }
-
 
 } // namespace MTblocking
 } // namespace Network
