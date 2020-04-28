@@ -81,10 +81,7 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers) {
 
 // See Server.h
 void ServerImpl::Stop() {
-    {
-        std::unique_lock<std::mutex> lock(_mutex);
-        running.store(false);
-    }
+    running.store(false);
 
     shutdown(_server_socket, SHUT_RDWR);
 
@@ -147,18 +144,17 @@ void ServerImpl::OnRun() {
         }
 
         // TODO: Start new thread and process data from/to connection
-        {
-            std::unique_lock<std::mutex> lock(_mutex);
-            if (running.load() && _count_workers < _max_workers) {
-                ++_count_workers;
-                std::thread(&ServerImpl::Worker, this, client_socket).detach();
-                {
-                    std::unique_lock<std::mutex> lock_cs(_m_cs);
-                    _client_sockets.insert(client_socket);
-                }
-            } else
-                close(client_socket);
-        }
+       
+        if (running.load() && _count_workers < _max_workers) {
+            ++_count_workers;
+            {
+                std::unique_lock<std::mutex> lock_cs(_m_cs);
+                _client_sockets.insert(client_socket);
+            }
+            std::thread(&ServerImpl::Worker, this, client_socket).detach();
+        } else
+            close(client_socket);
+        
     }
 
     // Cleanup on exit...
@@ -168,7 +164,7 @@ void ServerImpl::OnRun() {
 
 void ServerImpl::Worker(int client_socket ) {
 
-    std::size_t arg_remains;
+    std::size_t arg_remains = 0;
     Protocol::Parser parser;
     std::string argument_for_command;
     std::unique_ptr<Execute::Command> command_to_execute;
@@ -259,8 +255,8 @@ void ServerImpl::Worker(int client_socket ) {
     }
 
     --_count_workers;
-    if (!_count_workers) {
-        _cv.notify_one();
+    if (!_count_workers && running.load() == false) {
+        _cv.notify_all();
     }
 
 }
