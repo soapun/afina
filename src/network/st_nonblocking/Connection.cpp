@@ -117,27 +117,31 @@ void Connection::DoRead() {
 
 // See Connection.h
 void Connection::DoWrite() {
-    if (output.empty())
-        return;
-    _logger->debug("Write to {} socket", _socket);
-    struct iovec msg[output.size()];
-    msg[0].iov_len = output[0].size() - head_written;
-    msg[0].iov_base = &(output[0][0]) + head_written;
-    for (int i = 1; i < output.size(); ++i) {
-        msg[i].iov_len = output.size();
-        msg[i].iov_base = &(output[i][0]);
-    }
-    int written = writev(_socket, msg, output.size());
-    if (written <= 0)
-        OnError();
-    head_written += written;
-    int i = 0;
-    while (i < output.size() && head_written - msg[i].iov_len >= 0)
-        head_written -= msg[i++].iov_len;
+    try {    
+        if (output.empty())
+            return;
+        _logger->debug("Write to {} socket", _socket);
+        struct iovec msg[output.size()];
+        msg[0].iov_len = output[0].size() - head_written;
+        msg[0].iov_base = &(output[0][0]) + head_written;
+        for (int i = 1; i < output.size(); ++i) {
+            msg[i].iov_len = output.size();
+            msg[i].iov_base = &(output[i][0]);
+        }
+        int written = writev(_socket, msg, output.size());
+        if (written <= 0)
+            OnError();
+        head_written += written;
+        int i = 0;
+        while (i < output.size() && head_written - msg[i].iov_len >= 0)
+            head_written -= msg[i++].iov_len;
 
-    output.erase(output.begin(), output.begin() + i);
-    if (output.empty())
-        _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
+        output.erase(output.begin(), output.begin() + i);
+        if (output.empty())
+            _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
+    } catch (std::runtime_error &ex) {
+        OnError();    
+    }
 }
 
 } // namespace STnonblock
