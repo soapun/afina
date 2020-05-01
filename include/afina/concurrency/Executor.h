@@ -50,9 +50,12 @@ public:
     void Stop(bool await) {
         std::unique_lock<std::mutex> lock(mutex);
         state = State::kStopping;
-        empty_condition.notify_all();
-        if (await)
-            stop_condition.wait(lock, [this] { return this->state == State::kStopped;});
+        if (await && threads) {
+            stop_condition.wait(lock, [this] { return !threads;});
+            state = State::kStopped;        
+        } else if (!threads) {
+            state = State::kStopped;        
+        }
     }
     /**
      * Add function to be executed on the threadpool. Method returns true in case if task has been placed
@@ -99,7 +102,6 @@ public:
             std::thread([this]() {perform(this);}).detach();
             ++threads;
         }
-        working_threads = threads;
     }
 
 private:
@@ -113,30 +115,32 @@ private:
      * Main function that all pool threads are running. It polls internal task queue and execute tasks
      */
     void perform(Executor *executor) {
-        std::function<void()> task;
-        while(true) {
-            std::unique_lock<std::mutex> lock(executor->mutex);
-            bool res = executor->empty_condition.wait_for(lock, executor->idle_time,
-                                                          [executor] { return !(executor->tasks.empty()) || (executor->state != Executor::State::kRun);});
-            if (res) {
-                if ((executor->state == Executor::State::kRun || (executor->state == Executor::State::kStopping)) && !executor->tasks.empty()) {
-                    task = executor->tasks.front();
-                    executor->tasks.pop_front();
-                    executor->working_threads++;
-                } else if (!executor->working_threads) {
-                    executor->state = Executor::State::kStopped;
-                    executor->stop_condition.notify_one();
+        try {        
+            std::function<void()> task;
+            while(true) {
+                std::unique_lock<std::mutex> lock(executor->mutex);
+                bool res = executor->empty_condition.wait_until(lock, std::chrono::system_clock::now() + executor->idle_time,
+                                                              [executor] { return !(executor->tasks.empty()) || (executor->state != Executor::State::kRun);});
+                if (res) {
+                    if ((executor->state == Executor::State::kRun || (executor->state == Executor::State::kStopping)) && !executor->tasks.empty()) {
+                        task = executor->tasks.front();
+                        executor->tasks.pop_front();
+                        executor->working_threads++;
+                        task();
+                        executor->working_threads--;
+                    } else {
+                        break;
+                    }
+                } else if (executor->threads > executor->low_watermark){
+                    break;
                 }
-                break;
-            } else if (executor->threads > executor->low_watermark){
-                executor->threads--;
-                break;
             }
-        }
-
-        try {
-            task();
-        } catch (std::exception &e) { std::cout << e.what() << std::endl;}
+            
+            std::unique_lock<std::mutex> lock(executor->mutex);
+            executor->threads--;
+            if (executor->state == Executor::State::kStopping && executor->tasks.empty() && !executor->threads)
+                executor->stop_condition.notify_all();
+        } catch (std::exception &e) { std::cout << e.what() << std::endl; }
 
     }
     /**
